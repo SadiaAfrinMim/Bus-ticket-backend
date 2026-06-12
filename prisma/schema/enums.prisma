@@ -22,6 +22,7 @@ enum BookingStatus {
 
 // ২. পেমেন্ট স্ট্যাটাস এনাম
 enum PaymentStatus {
+  PENDING
   UNPAID
   PAID
   FAILED

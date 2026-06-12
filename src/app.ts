@@ -7,7 +7,8 @@ import { uptime } from 'process';
 import { timeStamp } from 'console';
 import router from './app/routes';
 import cookieParser from 'cookie-parser'
-import { PaymentController } from './app/modules/payment/payment.controller';
+import { PaymentControllers } from './app/modules/payment/payment.controller';
+
 
 
 
@@ -17,7 +18,7 @@ const app: Application = express();
 app.post(
     "/webhook",
     express.raw({ type: "application/json" }),
-    PaymentController.handleStripeWebhookEvent
+    PaymentControllers.handleStripeWebhookEvent
 );
 app.use(cors({
     origin: 'http://localhost:3000',

@@ -27,14 +27,14 @@ router.get(
 // ৩. নির্দিষ্ট একটি বুকিং দেখা 
 router.get(
   '/:id',
-  auth('ADMIN', 'USER'),
+  auth(Role.ADMIN, Role.USER),
   BookingControllers.getSingleBooking
 );
 
 // ৪. অ্যাডমিন কর্তৃক বুকিং স্ট্যাটাস আপডেট (যেমন: ম্যানুয়াল রিফান্ড বা ক্যানসেলেশন)
 router.patch(
   '/:id/status',
-  auth('ADMIN'),
+  auth(Role.ADMIN),
   validateRequest(BookingValidations.updateBookingStatusZodSchema),
   BookingControllers.updateBookingStatus
 );

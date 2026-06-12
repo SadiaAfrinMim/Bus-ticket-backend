@@ -11,14 +11,14 @@ model Booking {
   // স্ট্যাটাস ও অ্যামাউন্ট
   status        BookingStatus @default(PENDING)
   paymentStatus PaymentStatus @default(UNPAID)
-  totalAmount   String        // 👈 Decimal বদলে String করলাম, আগের সার্ভিস কোডের সাথে মিল রাখার জন্য
+  totalAmount   String        // সার্ভিস কোডের সাথে মিল রাখার জন্য String রাখা হলো
   
-  // পেমেন্ট গেটওয়ে ভেরিфикации ফিল্ডস
-  paymentId     String?       @unique 
-  paymentMethod PaymentMethod @default(OFFLINE)      
-  paymentUrl    String?       // 👈 🚨 এই নতুন ফিল্ডটি যোগ করা হলো (স্ট্রাইপ লিংকের জন্য)
-  paymentDetails Json?         
+  // পেমেন্ট গেটওয়ে লিংক (ইউজার রিডাইরেক্টের জন্য)
+  paymentUrl    String?       
   
+  // 🎯 One-to-One Relation with Payment Table
+  payment       Payment?
+
   // সিট লক করে রাখার ডেডলাইন
   expiresAt     DateTime
   

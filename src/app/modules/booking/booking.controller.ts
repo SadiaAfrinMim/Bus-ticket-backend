@@ -37,10 +37,11 @@ const getAllBookings = catchAsync(async (req: Request, res: Response) => {
 
 const getSingleBooking = catchAsync(async (req: Request, res: Response) => {
   const { id } = req.params;
+  console.log(id)
   const userId = req.user?.userId;
   const userRole = req.user?.role;
 
-  const result = await BookingServices.getSingleBookingFromDB(id, userId as string, userRole as string);
+  const result = await BookingServices.getSingleBookingFromDB(id as string, userId as string, userRole as string);
   sendResponse(res, {
     statusCode: 200,
     success: true,

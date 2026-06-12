@@ -1,0 +1,20 @@
+model Payment {
+  id             String        @id @default(uuid())
+  bookingId      String        @unique // এক বুকিংয়ের একটাই পেমেন্ট রেকর্ড থাকবে
+  booking        Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  
+  // পেমেন্ট গেটওয়ে ভেরিфикации ফিল্ডস
+  transactionId  String        @unique // আমারপে-র mer_txnid বা স্ট্রাইপের payment_intent ID
+  paymentMethod  PaymentMethod @default(OFFLINE)
+  status         PaymentStatus @default(PENDING)
+  amount         Float         // আসল ট্রানজেকশন অ্যামাউন্ট ট্র্যাকিংয়ের জন্য
+  currency       String        @default("BDT")
+  
+  // গেটওয়ে থেকে আসা পুরো রেসপন্স অবজেক্ট (Metadata) সেভ রাখার জন্য
+  paymentDetails Json?         
+
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@map("payments")
+}

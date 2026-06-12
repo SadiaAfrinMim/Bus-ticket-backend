@@ -11,7 +11,7 @@ import { stripe } from '../../helpers/stripe';
 // ১. বুকিং তৈরি এবং পেমেন্ট গেটওয়ের লিংক জেনারেট করা
 
 const initiateBookingIntoDB = async (userId: string, payload: any) => {
-  const { eventId, seatIds, paymentMethod } = payload;
+  const { eventId, seatIds, paymentMethod, customerEmail } = payload;
 
   return await prisma.$transaction(async (tx) => {
     // ১. ইভেন্ট চেক
@@ -35,7 +35,7 @@ const initiateBookingIntoDB = async (userId: string, payload: any) => {
     const eventPrice = Number(event.price || 1500);
     const totalAmount = eventPrice * seatIds.length;
 
-    // ৪. বুকিং রেকর্ড তৈরি
+    // ৪. বুকিং রেকর্ড তৈরি (নতুন ডাটাবেজ স্কিমা অনুযায়ী)
     const newBooking = await tx.booking.create({
       data: {
         userId,
@@ -43,7 +43,6 @@ const initiateBookingIntoDB = async (userId: string, payload: any) => {
         totalAmount: String(totalAmount),
         status: 'PENDING',
         paymentStatus: 'UNPAID',
-        paymentMethod: paymentMethod || 'ONLINE',
         expiresAt: new Date(Date.now() + 10 * 60 * 1000), // ১০ মিনিট লক
       },
     });
@@ -59,20 +58,20 @@ const initiateBookingIntoDB = async (userId: string, payload: any) => {
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         mode: 'payment',
-        // পেমেন্ট সফল বা ক্যানসেল হলে ইউজারকে ফ্রন্টএন্ডের (CLIENT_URL) কোন পেজে পাঠাবে
-        success_url: `${process.env.CLIENT_URL}/payment-success?bookingId=${newBooking.id}`,
+        // পেমেন্ট সফল বা ক্যানসেল হলে ইউজারকে ফ্রন্টএন্ডের (CLIENT_URL) পেজে পাঠাবে
+        success_url: `${process.env.CLIENT_URL}/payment-success?bookingId=${newBooking.id}&sessionId={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.CLIENT_URL}/cart`,
-        customer_email: payload.customerEmail, // কাস্টমারের ইমেইল (অপশনাল কিন্তু রিকমেন্ডেড)
-        client_reference_id: newBooking.id,   // ট্র্যাকিংয়ের জন্য বুকিং আইডি পাস করা হলো
+        customer_email: customerEmail,
+        client_reference_id: newBooking.id, // ট্র্যাকিংয়ের জন্য বুকিং আইডি পাস করা হলো
         line_items: [
           {
             price_data: {
-              currency: 'bdt', // আপনি চাইলে usd বা bdt রাখতে পারেন
+              currency: 'bdt',
               product_data: {
                 name: `Seat Booking for ${event.title || 'Event'}`,
                 description: `Seats: ${seatIds.length} seat(s) reserved.`,
               },
-              unit_amount: eventPrice * 100, // 🚨 স্ট্রাইপ পয়সা/সেন্ট হিসাব করে, তাই ১০০ দিয়ে গুণ করতে হবে (যেমন: ১৫০০ টাকা = ১৫০০০০ সেন্ট)
+              unit_amount: eventPrice * 100, // সেন্টে কনভার্ট করার জন্য ১০০ দিয়ে গুণ
             },
             quantity: seatIds.length,
           },
@@ -80,19 +79,39 @@ const initiateBookingIntoDB = async (userId: string, payload: any) => {
       });
 
       if (session.url) {
+        // 🎯 জাদুকরী পরিবর্তন: নতুন আলাদা 'Payment' টেবিলে একটি PENDING রেকর্ড তৈরি করা হচ্ছে
+        // স্ট্রাইপের সেশন আইডি (session.id) কে আপাতত ইউনিক 'transactionId' হিসেবে ট্র্যাক করছি
+        await tx.payment.create({
+          data: {
+            bookingId: newBooking.id,
+            transactionId: session.id, 
+            paymentMethod: paymentMethod === 'STRIPE' ? 'STRIPE' : 'ONLINE',
+            status: 'PENDING',
+            amount: totalAmount,
+            currency: 'BDT',
+            paymentDetails: JSON.parse(JSON.stringify(session)), // সেশনের পুরো অবজেক্ট ব্যাকআপ রাখা হলো
+          },
+        });
+
+        // বুকিং মডেলে paymentUrl আপডেট করে দেওয়া (ফ্রন্টএন্ডে রিডাইরেক্টের সুবিধার জন্য)
+        const updatedBooking = await tx.booking.update({
+          where: { id: newBooking.id },
+          data: { paymentUrl: session.url },
+        });
+
         return {
-          booking: newBooking,
-          paymentUrl: session.url, // 👈 এটিই হচ্ছে ফ্রন্টএন্ডে পাঠানোর জন্য স্ট্রাইপের পেমেন্ট লিংক
+          booking: updatedBooking,
+          paymentUrl: session.url, // ফ্রন্টএন্ডে পাঠানোর পেমেন্ট লিংক
         };
-       } else {
-         throw new ApiError(500, 'Stripe failed to return a checkout URL');
-       }
-     } catch (error: any) {
-       console.error("🚨 Stripe Error Log:", error.message);
-       throw new ApiError(500, `Failed to communicate with Stripe Gateway: ${error.message}`);
-     }
-   }, { maxWait: 5000, timeout: 20000 });
- };
+      } else {
+        throw new ApiError(500, 'Stripe failed to return a checkout URL');
+      }
+    } catch (error: any) {
+      console.error("🚨 Stripe Error Log:", error.message);
+      throw new ApiError(500, `Failed to communicate with Stripe Gateway: ${error.message}`);
+    }
+  }, { maxWait: 5000, timeout: 500000 });
+};
 
 
 
