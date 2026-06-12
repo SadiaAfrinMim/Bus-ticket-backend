@@ -1,0 +1,34 @@
+model Booking {
+  id            String        @id @default(uuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventId       String
+  event         Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  
+  // এক বুকিংয়ে একাধিক সিট থাকতে পারে
+  seats         Seat[]
+  
+  // স্ট্যাটাস ও অ্যামাউন্ট
+  status        BookingStatus @default(PENDING)
+  paymentStatus PaymentStatus @default(UNPAID)
+  totalAmount   String        // 👈 Decimal বদলে String করলাম, আগের সার্ভিস কোডের সাথে মিল রাখার জন্য
+  
+  // পেমেন্ট গেটওয়ে ভেরিфикации ফিল্ডস
+  paymentId     String?       @unique 
+  paymentMethod PaymentMethod @default(OFFLINE)      
+  paymentUrl    String?       // 👈 🚨 এই নতুন ফিল্ডটি যোগ করা হলো (স্ট্রাইপ লিংকের জন্য)
+  paymentDetails Json?         
+  
+  // সিট লক করে রাখার ডেডলাইন
+  expiresAt     DateTime
+  
+  // PDF এবং QR Code জেনারেট করার জন্য সিকিউর টোকেন
+  ticketToken   String?       @unique @default(uuid()) 
+  
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([userId])
+  @@index([eventId])
+  @@map("bookings")
+}
