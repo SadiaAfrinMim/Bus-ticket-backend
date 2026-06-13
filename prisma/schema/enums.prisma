@@ -7,25 +7,22 @@ enum Role {
 enum SeatStatus {
   AVAILABLE
   LOCKED
-  BOOKED
   SOLD
-
+  BOOKED
 }
 
-// ১. বুকিং স্ট্যাটাস এনাম
 enum BookingStatus {
-  PENDING    // কাস্টমার সিট সিলেক্ট করেছে কিন্তু এখনো পেমেন্ট করেনি
-  CONFIRMED  // পেমেন্ট সাকসেসফুল এবং টিকিট কনফার্মড
-  CANCELLED  // পেমেন্ট করতে দেরি করায় বা কাস্টমার নিজে ক্যান্সেল করলে
-  REFUNDED   // ইভেন্ট বাতিল বা রিফান্ড পলিসি অনুযায়ী টাকা ফেরত দিলে
+  PENDING
+  CONFIRMED
+  CANCELLED
+  REFUNDED
 }
 
-// ২. পেমেন্ট স্ট্যাটাস এনাম
 enum PaymentStatus {
-  PENDING
   UNPAID
   PAID
   FAILED
+  PENDING
 }
 
 enum PaymentMethod {

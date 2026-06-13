@@ -6,6 +6,7 @@ import axios from 'axios';
 import { TBookingPayload } from './booking.interface';
 import { prisma } from '../../shared/prisma';
 import { stripe } from '../../helpers/stripe';
+import { BookingStatus, PaymentStatus, PaymentMethod, SeatStatus } from '@prisma/client';
 
 
 // ১. বুকিং তৈরি এবং পেমেন্ট গেটওয়ের লিংক জেনারেট করা
@@ -35,22 +36,22 @@ const initiateBookingIntoDB = async (userId: string, payload: any) => {
     const eventPrice = Number(event.price || 1500);
     const totalAmount = eventPrice * seatIds.length;
 
-    // ৪. বুকিং রেকর্ড তৈরি (নতুন ডাটাবেজ স্কিমা অনুযায়ী)
+    // ৪. বুকিং রেকর্ড তৈরি — BookingStatus: PENDING, PaymentStatus: UNPAID
     const newBooking = await tx.booking.create({
       data: {
         userId,
         eventId,
         totalAmount: String(totalAmount),
-        status: 'PENDING',
-        paymentStatus: 'UNPAID',
+        status: BookingStatus.PENDING,
+        paymentStatus: PaymentStatus.UNPAID,
         expiresAt: new Date(Date.now() + 10 * 60 * 1000), // ১০ মিনিট লক
       },
     });
 
-    // ৫. সাময়িকভাবে সিটগুলো লক (LOCKED) করা
+    // ৫. সাময়িকভাবে সিটগুলো লক — AVAILABLE → LOCKED
     await tx.seat.updateMany({
       where: { id: { in: seatIds } },
-      data: { status: 'LOCKED', bookingId: newBooking.id },
+      data: { status: SeatStatus.LOCKED, bookingId: newBooking.id },
     });
 
     // ⚡ ৬. স্ট্রাইপ পেমেন্ট গেটওয়ে (Stripe Checkout Session) কল করা
@@ -58,11 +59,11 @@ const initiateBookingIntoDB = async (userId: string, payload: any) => {
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         mode: 'payment',
-        // পেমেন্ট সফল বা ক্যানসেল হলে ইউজারকে ফ্রন্টএন্ডের (CLIENT_URL) পেজে পাঠাবে
         success_url: `${process.env.CLIENT_URL}/payment-success?bookingId=${newBooking.id}&sessionId={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.CLIENT_URL}/cart`,
         customer_email: customerEmail,
-        client_reference_id: newBooking.id, // ট্র্যাকিংয়ের জন্য বুকিং আইডি পাস করা হলো
+        client_reference_id: newBooking.id,
+        metadata: { bookingId: newBooking.id },
         line_items: [
           {
             price_data: {
@@ -71,7 +72,7 @@ const initiateBookingIntoDB = async (userId: string, payload: any) => {
                 name: `Seat Booking for ${event.title || 'Event'}`,
                 description: `Seats: ${seatIds.length} seat(s) reserved.`,
               },
-              unit_amount: eventPrice * 100, // সেন্টে কনভার্ট করার জন্য ১০০ দিয়ে গুণ
+              unit_amount: eventPrice * 100,
             },
             quantity: seatIds.length,
           },
@@ -79,21 +80,20 @@ const initiateBookingIntoDB = async (userId: string, payload: any) => {
       });
 
       if (session.url) {
-        // 🎯 জাদুকরী পরিবর্তন: নতুন আলাদা 'Payment' টেবিলে একটি PENDING রেকর্ড তৈরি করা হচ্ছে
-        // স্ট্রাইপের সেশন আইডি (session.id) কে আপাতত ইউনিক 'transactionId' হিসেবে ট্র্যাক করছি
+        // PaymentStatus: UNPAID → PENDING (স্ট্রাইপ চেকআউট শুরু)
         await tx.payment.create({
           data: {
             bookingId: newBooking.id,
-            transactionId: session.id, 
-            paymentMethod: paymentMethod === 'STRIPE' ? 'STRIPE' : 'ONLINE',
-            status: 'PENDING',
+            transactionId: session.id,
+            paymentMethod: paymentMethod === 'STRIPE' ? PaymentMethod.STRIPE : PaymentMethod.ONLINE,
+            status: PaymentStatus.PENDING,
             amount: totalAmount,
             currency: 'BDT',
-            paymentDetails: JSON.parse(JSON.stringify(session)), // সেশনের পুরো অবজেক্ট ব্যাকআপ রাখা হলো
+            paymentDetails: JSON.parse(JSON.stringify(session)),
           },
         });
 
-        // বুকিং মডেলে paymentUrl আপডেট করে দেওয়া (ফ্রন্টএন্ডে রিডাইরেক্টের সুবিধার জন্য)
+        // বুকিং মডেলে paymentUrl আপডেট
         const updatedBooking = await tx.booking.update({
           where: { id: newBooking.id },
           data: { paymentUrl: session.url },
@@ -101,7 +101,7 @@ const initiateBookingIntoDB = async (userId: string, payload: any) => {
 
         return {
           booking: updatedBooking,
-          paymentUrl: session.url, // ফ্রন্টএন্ডে পাঠানোর পেমেন্ট লিংক
+          paymentUrl: session.url,
         };
       } else {
         throw new ApiError(500, 'Stripe failed to return a checkout URL');
@@ -118,7 +118,6 @@ const initiateBookingIntoDB = async (userId: string, payload: any) => {
 const getAllBookingsFromDB = async (userId: string, userRole: string) => {
   let queryFilter = {};
 
-  // যদি ইউজার ADMIN না হয়, তবে সে শুধু নিজের বুকিং দেখতে পাবে
   if (userRole !== 'ADMIN') {
     queryFilter = { userId: userId };
   }
@@ -134,7 +133,7 @@ const getAllBookingsFromDB = async (userId: string, userRole: string) => {
   });
 };
 
-// ৩. নির্দিষ্ট একটি বুকিং দেখা (সিকিউরিটি চেক সহ)
+// ৩. নির্দিষ্ট একটি বুকিং দেখা
 const getSingleBookingFromDB = async (bookingId: string, userId: string, userRole: string) => {
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
@@ -150,22 +149,40 @@ const getSingleBookingFromDB = async (bookingId: string, userId: string, userRol
   return booking;
 };
 
-// ৪. অ্যাডমিন কর্তৃক ম্যানুয়ালি বুকিং স্ট্যাটাস আপডেট করা
+// ৪. অ্যাডমিন কর্তৃক ম্যানুয়ালি বুকিং স্ট্যাটাস আপডেট (CANCELLED / REFUNDED)
 const updateBookingStatusInDB = async (bookingId: string, payload: { status?: any; paymentStatus?: any }) => {
   return await prisma.$transaction(async (tx) => {
     const booking = await tx.booking.findUnique({ where: { id: bookingId } });
     if (!booking) throw new ApiError(404, 'Booking not found!');
+
+    // Conditional: CANCELLED শুধুমাত্র PENDING থেকেই আসতে পারে
+    if (payload.status === 'CANCELLED' && booking.status !== BookingStatus.PENDING) {
+      throw new ApiError(400, `Cannot cancel booking with status ${booking.status}. Only PENDING bookings can be cancelled.`);
+    }
+
+    // Conditional: REFUNDED শুধুমাত্র CONFIRMED থেকেই আসতে পারে
+    if (payload.status === 'REFUNDED' && booking.status !== BookingStatus.CONFIRMED) {
+      throw new ApiError(400, `Cannot refund booking with status ${booking.status}. Only CONFIRMED bookings can be refunded.`);
+    }
 
     const updatedBooking = await tx.booking.update({
       where: { id: bookingId },
       data: payload,
     });
 
-    // যদি অ্যাডমিন বুকিং CANCELLED করে দেয়, তবে সিটগুলো আবার AVAILABLE করতে হবে
+    // CANCELLED হলে সিটগুলো আবার AVAILABLE — LOCKED → AVAILABLE
     if (payload.status === 'CANCELLED') {
       await tx.seat.updateMany({
         where: { bookingId: bookingId },
-        data: { status: 'AVAILABLE', bookingId: null },
+        data: { status: SeatStatus.AVAILABLE, bookingId: null },
+      });
+    }
+
+    // REFUNDED হলেও সিটগুলো আবার AVAILABLE — SOLD → AVAILABLE
+    if (payload.status === 'REFUNDED') {
+      await tx.seat.updateMany({
+        where: { bookingId: bookingId },
+        data: { status: SeatStatus.AVAILABLE, bookingId: null },
       });
     }
 
@@ -173,40 +190,84 @@ const updateBookingStatusInDB = async (bookingId: string, payload: { status?: an
   });
 };
 
-// ৫. পেমেন্ট সাকসেস হলে গেটওয়ে দ্বারা কলব্যাক
-const confirmBookingInDB = async (bookingId: string, paymentId: string, paymentDetails: any) => {
+// ৫. পেমেন্ট সাকসেস হলে কলব্যাক — শুধুমাত্র PENDING → CONFIRMED
+const confirmBookingInDB = async (bookingId: string, sessionId: string, paymentDetails?: any) => {
   return await prisma.$transaction(async (tx) => {
-    // বুকিং আপডেট
+    const existingBooking = await tx.booking.findUnique({
+      where: { id: bookingId },
+    });
+    if (!existingBooking) throw new ApiError(404, 'Booking not found!');
+
+    // Conditional: শুধুমাত্র PENDING থেকেই CONFIRMED হতে পারে
+    if (existingBooking.status !== BookingStatus.PENDING) {
+      console.log(`ℹ️ Booking ${bookingId} is ${existingBooking.status}, skipping confirm.`);
+      return existingBooking;
+    }
+
+    // BookingStatus: PENDING → CONFIRMED, PaymentStatus: UNPAID → PAID
     const updatedBooking = await tx.booking.update({
       where: { id: bookingId },
       data: {
-        status: 'CONFIRMED',
-        paymentStatus: 'PAID',
-        paymentId: paymentId,
-        paymentDetails: paymentDetails,
+        status: BookingStatus.CONFIRMED,
+        paymentStatus: PaymentStatus.PAID,
       },
+      include: { seats: true, payment: true },
     });
 
-    // সিটগুলো বিক্রieuseudo (SOLD) আপডেট
-    await tx.seat.updateMany({
-      where: { bookingId: bookingId },
-      data: { status: 'SOLD' },
-    });
+    // PaymentStatus: PENDING → PAID
+    if (updatedBooking.payment) {
+      await tx.payment.update({
+        where: { bookingId: bookingId },
+        data: {
+          status: PaymentStatus.PAID,
+          paymentMethod: PaymentMethod.STRIPE,
+          transactionId: sessionId,
+          paymentDetails: paymentDetails ? JSON.parse(JSON.stringify(paymentDetails)) : undefined,
+        },
+      });
+    }
+
+    // সিটগুলো — LOCKED → SOLD
+    if (updatedBooking.seats && updatedBooking.seats.length > 0) {
+      const seatIds = updatedBooking.seats.map((seat) => seat.id);
+      await tx.seat.updateMany({
+        where: { id: { in: seatIds } },
+        data: { status: SeatStatus.SOLD },
+      });
+    }
 
     return updatedBooking;
   });
 };
 
-// ৬. পেমেন্ট ফেইল হলে গেটওয়ে দ্বারা কলব্যাক
+// ৬. পেমেন্ট ফেইল হলে কলব্যাক — শুধুমাত্র PENDING → CANCELLED
 const cancelBookingInDB = async (bookingId: string) => {
   return await prisma.$transaction(async (tx) => {
+    const booking = await tx.booking.findUnique({ where: { id: bookingId } });
+    if (!booking) throw new ApiError(404, 'Booking not found!');
+
+    // Conditional: শুধুমাত্র PENDING থেকেই CANCELLED হতে পারে
+    if (booking.status !== BookingStatus.PENDING) {
+      console.log(`ℹ️ Booking ${bookingId} is ${booking.status}, skipping cancel.`);
+      return booking;
+    }
+
+    // BookingStatus: PENDING → CANCELLED, PaymentStatus: UNPAID → FAILED
     await tx.booking.update({
       where: { id: bookingId },
-      data: { status: 'CANCELLED', paymentStatus: 'FAILED' },
+      data: { status: BookingStatus.CANCELLED, paymentStatus: PaymentStatus.FAILED },
     });
+
+    // PaymentStatus: PENDING → FAILED
+    await tx.payment.updateMany({
+      where: { bookingId: bookingId },
+      data: { status: PaymentStatus.FAILED },
+    });
+
+    // সিটগুলো — LOCKED → AVAILABLE
     await tx.seat.updateMany({
       where: { bookingId: bookingId },
-      data: { status: 'AVAILABLE', bookingId: null },
+      data: { status: SeatStatus.AVAILABLE, bookingId: null },
     });
   });
 };

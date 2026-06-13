@@ -6,10 +6,11 @@ const handleStripeWebhookEvent = async (event: Stripe.Event) => {
   console.log("🚀 Webhook Event Received from Stripe:", event.type);
 
   switch (event.type) {
-    // ⚡ ১. পেমেন্ট সফল হলে
+
+    // ⚡ ১. পেমেন্ট সফল হলে — PENDING → CONFIRMED
     case "checkout.session.completed": {
       const session = event.data.object as Stripe.Checkout.Session;
-      const bookingId = session.client_reference_id;
+      const bookingId = session.client_reference_id ?? null;
 
       if (!bookingId) {
         console.error("🚨 Webhook Error: No bookingId found in session.client_reference_id!");
@@ -18,9 +19,22 @@ const handleStripeWebhookEvent = async (event: Stripe.Event) => {
 
       console.log("🎯 Processing Payment Success for Booking ID:", bookingId);
 
-      // ট্রানজেকশন শুরু
+      // Idempotency: skip if already confirmed
+      const existingBooking = await prisma.booking.findUnique({
+        where: { id: bookingId },
+      });
+      if (!existingBooking) {
+        console.error(`🚨 Booking ${bookingId} not found!`);
+        break;
+      }
+      if (existingBooking.status === BookingStatus.CONFIRMED) {
+        console.log(`ℹ️ Booking ${bookingId} already confirmed, skipping duplicate webhook.`);
+        break;
+      }
+
+      // ট্রানজেকশন শুরু — সব আপডেট পরস্পর নির্ভরশীল
       await prisma.$transaction(async (tx) => {
-        // বুকিং আপডেট করা
+        // BookingStatus: PENDING → CONFIRMED, PaymentStatus: UNPAID → PAID
         const updatedBooking = await tx.booking.update({
           where: { id: bookingId },
           data: {
@@ -30,7 +44,7 @@ const handleStripeWebhookEvent = async (event: Stripe.Event) => {
           include: { seats: true },
         });
 
-        // পেমেন্ট টেবিল তৈরি বা আপডেট করা
+        // PaymentStatus: PENDING → PAID
         await tx.payment.upsert({
           where: { bookingId: bookingId },
           update: {
@@ -49,7 +63,7 @@ const handleStripeWebhookEvent = async (event: Stripe.Event) => {
           },
         });
 
-        // সিটগুলোর স্ট্যাটাস আপডেট করা
+        // সিটগুলো — LOCKED → SOLD
         if (updatedBooking.seats && updatedBooking.seats.length > 0) {
           const seatIds = updatedBooking.seats.map((seat) => seat.id);
           await tx.seat.updateMany({
@@ -63,50 +77,117 @@ const handleStripeWebhookEvent = async (event: Stripe.Event) => {
       break;
     }
 
-    // ⚡ ২. পেমেন্ট এক্সপায়ার্ড বা ফেইল হলে
+    // ⚡ ২. পেমেন্ট ফেইল হলে (payment_intent.payment_failed) — PENDING → CANCELLED
+    case "payment_intent.payment_failed": {
+      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+      const bookingId = paymentIntent.metadata?.bookingId ?? null;
+
+      if (!bookingId) {
+        console.error("🚨 Webhook Error: No bookingId found in payment_intent.metadata!");
+        break;
+      }
+
+      console.log("⚠️ Processing Payment Failure for Booking ID:", bookingId);
+
+      const existingBooking = await prisma.booking.findUnique({
+        where: { id: bookingId },
+      });
+      if (!existingBooking) {
+        console.error(`🚨 Booking ${bookingId} not found!`);
+        break;
+      }
+      if (existingBooking.status !== BookingStatus.PENDING) {
+        console.log(`ℹ️ Booking ${bookingId} is ${existingBooking.status}, skipping failure handler.`);
+        break;
+      }
+
+      await prisma.$transaction(async (tx) => {
+        // BookingStatus: PENDING → CANCELLED, PaymentStatus: UNPAID → FAILED
+        await tx.booking.update({
+          where: { id: bookingId },
+          data: {
+            status: BookingStatus.CANCELLED,
+            paymentStatus: PaymentStatus.FAILED,
+          },
+        });
+
+        // PaymentStatus: PENDING → FAILED
+        await tx.payment.updateMany({
+          where: { bookingId: bookingId },
+          data: {
+            status: PaymentStatus.FAILED,
+            paymentDetails: JSON.parse(JSON.stringify(paymentIntent)),
+          },
+        });
+
+        // সিটগুলো — LOCKED → AVAILABLE
+        await tx.seat.updateMany({
+          where: { bookingId: bookingId },
+          data: { status: SeatStatus.AVAILABLE, bookingId: null },
+        });
+      });
+
+      console.log(`❌ Payment failed for Booking ${bookingId}, seats released.`);
+      break;
+    }
+
+    // ⚡ ৩. চেকআউট সেশন এক্সপায়ার্ড — PENDING → CANCELLED
     case "checkout.session.expired": {
       const session = event.data.object as Stripe.Checkout.Session;
-      const bookingId = session.client_reference_id;
+      const bookingId = session.client_reference_id ?? null;
 
-      if (bookingId) {
-        console.log("⚠️ Processing Expiration for Booking ID:", bookingId);
-        
-        await prisma.$transaction(async (tx) => {
-          const bookingWithSeats = await tx.booking.findUnique({
-            where: { id: bookingId },
-            include: { seats: true },
-          });
-
-          await tx.booking.update({
-            where: { id: bookingId },
-            data: {
-              status: BookingStatus.CANCELLED,
-              paymentStatus: PaymentStatus.FAILED,
-            },
-          });
-
-          await tx.payment.upsert({
-            where: { bookingId: bookingId },
-            update: { status: PaymentStatus.FAILED },
-            create: {
-              bookingId: bookingId,
-              transactionId: session.id,
-              paymentMethod: PaymentMethod.STRIPE,
-              status: PaymentStatus.FAILED,
-              amount: bookingWithSeats ? Number(bookingWithSeats.totalAmount) : 0,
-              currency: "BDT",
-              paymentDetails: JSON.parse(JSON.stringify(session)),
-            },
-          });
-
-          if (bookingWithSeats?.seats && bookingWithSeats.seats.length > 0) {
-            await tx.seat.updateMany({
-              where: { id: { in: bookingWithSeats.seats.map((s) => s.id) } },
-              data: { status: SeatStatus.AVAILABLE, bookingId: null },
-            });
-          }
-        });
+      if (!bookingId) {
+        console.error("🚨 Webhook Error: No bookingId found in session.client_reference_id!");
+        break;
       }
+
+      console.log("⚠️ Processing Expiration for Booking ID:", bookingId);
+
+      const existingBooking = await prisma.booking.findUnique({
+        where: { id: bookingId },
+      });
+      if (!existingBooking) {
+        console.error(`🚨 Booking ${bookingId} not found!`);
+        break;
+      }
+      if (existingBooking.status !== BookingStatus.PENDING) {
+        console.log(`ℹ️ Booking ${bookingId} is ${existingBooking.status}, skipping expiration handler.`);
+        break;
+      }
+
+      await prisma.$transaction(async (tx) => {
+        // BookingStatus: PENDING → CANCELLED, PaymentStatus: UNPAID → FAILED
+        await tx.booking.update({
+          where: { id: bookingId },
+          data: {
+            status: BookingStatus.CANCELLED,
+            paymentStatus: PaymentStatus.FAILED,
+          },
+        });
+
+        // PaymentStatus: PENDING → FAILED
+        await tx.payment.upsert({
+          where: { bookingId: bookingId },
+          update: { status: PaymentStatus.FAILED },
+          create: {
+            bookingId: bookingId,
+            transactionId: session.id,
+            paymentMethod: PaymentMethod.STRIPE,
+            status: PaymentStatus.FAILED,
+            amount: 0,
+            currency: "BDT",
+            paymentDetails: JSON.parse(JSON.stringify(session)),
+          },
+        });
+
+        // সিটগুলো — LOCKED → AVAILABLE
+        await tx.seat.updateMany({
+          where: { bookingId: bookingId },
+          data: { status: SeatStatus.AVAILABLE, bookingId: null },
+        });
+      });
+
+      console.log(`⏰ Session expired for Booking ${bookingId}, seats released.`);
       break;
     }
 
