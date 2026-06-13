@@ -1,28 +1,20 @@
 model Seat {
   id             String     @id @default(uuid())
   eventId        String
-  event          Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  row            String     // e.g., 'A', 'B'
-  number         Int        // e.g., 1, 2, 3
+  row            String
+  number         Int
   status         SeatStatus @default(AVAILABLE)
-  
-  // ৫ মিনিটের Redis Lock এবং রিয়েল-টাইম ট্র্যাকিং ফিল্ডস
   lockedAt       DateTime?
   lockedByUserId String?
-  lockedByUser   User?      @relation(fields: [lockedByUserId], references: [id])
-  
-  // Race Condition এড়ানোর জন্য Optimistic Locking (DB Level)
-  version        Int        @default(0) 
-  
+  version        Int        @default(0)
   bookingId      String?
-  booking        Booking?   @relation(fields: [bookingId], references: [id])
-
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
+  booking        Booking?   @relation(fields: [bookingId], references: [id])
+  event          Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  lockedByUser   User?      @relation(fields: [lockedByUserId], references: [id])
 
-  // একই ইভেন্টে একই সিট যেন ডুপ্লিকেট না হয়
   @@unique([eventId, row, number])
-  // দ্রুত লাইভ স্ট্যাটাস চেক করার জন্য ইনডেক্স
   @@index([eventId, status])
   @@map("seats")
 }

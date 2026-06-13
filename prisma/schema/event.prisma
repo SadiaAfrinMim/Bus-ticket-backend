@@ -4,14 +4,12 @@ model Event {
   description String?
   dateTime    DateTime
   venue       String
-  price       Decimal   @db.Decimal(10, 2) // নিখুঁত হিসাবের জন্য Decimal ব্যবহার করা হয়েছে
+  price       Decimal   @db.Decimal(10, 2)
   imageUrl    String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
-  
-  // Relations
-  seats       Seat[]
   bookings    Booking[]
+  seats       Seat[]
 
   @@map("events")
 }

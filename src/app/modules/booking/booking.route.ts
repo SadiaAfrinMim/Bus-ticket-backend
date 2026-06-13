@@ -39,9 +39,9 @@ router.patch(
   BookingControllers.updateBookingStatus
 );
 
-// ৫. পেমেন্ট গেটওয়ের সাকসেস এবং ফেইল কলব্যাক রুট (Webhook)
-// 🚨 এখানে auth মিডলওয়্যার দেওয়া যাবে না, কারণ গেটওয়ে এই ইউআরএল-এ রিকোয়েস্ট পাঠাবে।
-router.post('/payment-success', BookingControllers.paymentVerify);
-router.post('/payment-fail', BookingControllers.paymentCancel);
+// ৫. পেমেন্ট গেটওয়ের সাকসেস এবং ফেইল কলব্যাক রুট (Browser Redirect)
+// 🚨 এখানে auth মিডলওয়্যার দেওয়া যাবে না, কারণ গেটওয়ে ইউজারকে ব্রাউজার থেকে রিডাইরেক্ট করবে (GET request)।
+router.get('/payment-success', BookingControllers.paymentVerify);
+router.get('/payment-fail', BookingControllers.paymentCancel);
 
 export const BookingRoutes = router;
