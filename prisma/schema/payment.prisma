@@ -4,7 +4,7 @@ model Payment {
   booking        Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   
   // পেমেন্ট গেটওয়ে ভেরিфикации ফিল্ডস
-  transactionId  String        @unique // আমারপে-র mer_txnid বা স্ট্রাইপের payment_intent ID
+  transactionId  String       
   paymentMethod  PaymentMethod @default(OFFLINE)
   status         PaymentStatus @default(PENDING)
   amount         Float         // আসল ট্রানজেকশন অ্যামাউন্ট ট্র্যাকিংয়ের জন্য
