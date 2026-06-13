@@ -1,32 +1,19 @@
 model Booking {
   id            String        @id @default(uuid())
   userId        String
-  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   eventId       String
-  event         Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  
-  // এক বুকিংয়ে একাধিক সিট থাকতে পারে
-  seats         Seat[]
-  
-  // স্ট্যাটাস ও অ্যামাউন্ট
   status        BookingStatus @default(PENDING)
-  paymentStatus PaymentStatus @default(UNPAID)
-  totalAmount   String        // সার্ভিস কোডের সাথে মিল রাখার জন্য String রাখা হলো
-  
-  // পেমেন্ট গেটওয়ে লিংক (ইউজার রিডাইরেক্টের জন্য)
-  paymentUrl    String?       
-  
-  // 🎯 One-to-One Relation with Payment Table
-  payment       Payment?
-
-  // সিট লক করে রাখার ডেডলাইন
-  expiresAt     DateTime
-  
-  // PDF এবং QR Code জেনারেট করার জন্য সিকিউর টোকেন
-  ticketToken   String?       @unique @default(uuid()) 
-  
+  totalAmount   String
+  ticketToken   String?       @unique @default(uuid())
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
+  expiresAt     DateTime
+  paymentStatus PaymentStatus @default(UNPAID)
+  paymentUrl    String?
+  event         Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payment       Payment?
+  seats         Seat[]
 
   @@index([userId])
   @@index([eventId])

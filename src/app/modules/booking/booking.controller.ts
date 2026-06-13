@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import catchAsync from '../../shared/catchAsync';
 import sendResponse from '../../shared/sendResponse';
 import { BookingServices } from './booking.service';
+import { stripe } from '../../helpers/stripe';
 
 const initiateBooking = catchAsync(async (req: Request, res: Response) => {
   // টোকেন থেকে আইডি নেওয়ার জন্য একটি সেফটি চেক
@@ -63,21 +64,41 @@ const updateBookingStatus = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
-// 🚀 পেমেন্ট ভেরিফিকেশন (যেটি আমরা সার্ভিসে তৈরি করেছি)
+// 🚀 পেমেন্ট ভেরিফিকেশন (ইউজার ব্রাউজার থেকে রিডাইরেক্ট হলে - GET)
 const paymentVerify = catchAsync(async (req: Request, res: Response) => {
   const { bookingId, sessionId } = req.query;
 
-  // সার্ভিস কল করে স্ট্যাটাস আপডেট করা
-  await BookingServices.confirmBookingInDB(bookingId as string, sessionId as string, { status: 'verified_via_stripe' });
-  
+  if (!bookingId || !sessionId) {
+    return res.redirect(`${process.env.CLIENT_CANCEL_URL || 'http://localhost:3000'}/payment/cancel?reason=missing_params`);
+  }
+
+  // Verify the session is actually paid by fetching from Stripe
+  const session = await stripe.checkout.sessions.retrieve(sessionId as string);
+  if (session.payment_status !== 'paid') {
+    console.error(`🚨 Payment not completed for session ${sessionId}`);
+    return res.redirect(`${process.env.CLIENT_CANCEL_URL || 'http://localhost:3000'}/payment/cancel?reason=not_paid`);
+  }
+
+  // Confirm booking with payment details
+  await BookingServices.confirmBookingInDB(
+    bookingId as string,
+    sessionId as string,
+    session
+  );
+
   // আপডেট শেষে ফ্রন্টএন্ডে রিডাইরেক্ট
   res.redirect(`${process.env.CLIENT_SUCCESS_URL || 'http://localhost:3000'}/payment/success?bookingId=${bookingId}`);
 });
 
-// পেমেন্ট ক্যানসেল বা ফেইল হলে
+// পেমেন্ট ক্যানসেল বা ফেইল হলে (GET — ব্রাউজার রিডাইরেক্ট)
 const paymentCancel = catchAsync(async (req: Request, res: Response) => {
   const { bookingId } = req.query;
-  
+
+  if (!bookingId) {
+    return res.redirect(`${process.env.CLIENT_CANCEL_URL || 'http://localhost:3000'}/payment/cancel?reason=missing_booking`);
+  }
+
+  // cancelBookingInDB is conditional — only cancels if PENDING
   await BookingServices.cancelBookingInDB(bookingId as string);
   res.redirect(`${process.env.CLIENT_CANCEL_URL || 'http://localhost:3000'}/payment/cancel`);
 });

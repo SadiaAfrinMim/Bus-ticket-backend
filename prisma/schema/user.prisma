@@ -1,29 +1,24 @@
-// ইউজার অ্যাকাউন্ট কন্ট্রোল করার জন্য স্ট্যাটাস এনাম
-enum UserStatus {
-  ACTIVE
-  SUSPENDED
-  BANNED
-}
-
 model User {
   id         String     @id @default(uuid())
   name       String
   email      String     @unique
-  password   String     
-  role       Role       @default(USER) // USER, ADMIN, ORGANIZER
+  password   String
+  role       Role       @default(USER)
   status     UserStatus @default(ACTIVE)
-  profilePic String?    
-  
-  // অ্যাডমিন বা অর্গানাইজারদের এক্সট্রা তথ্যের জন্য (Designation, Company Name ইত্যাদি)
-  metaData   Json?      // 👈 এটি একটি ম্যাজিক ফিল্ড! এখানে যেকোনো কাস্টম অবজেক্ট রাখা যায়।
-
+  profilePic String?
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
-  
+  metaData   Json?
   bookings   Booking[]
-  seats      Seat[]     
+  seats      Seat[]
 
   @@index([email])
   @@index([status])
   @@map("users")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
 }
